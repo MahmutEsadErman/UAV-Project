@@ -47,7 +47,7 @@ class DroneSubscriber:
         self.bridge = CvBridge()
         
         # Subscribe to the image topic
-        self.image_sub = rospy.Subscriber('/firefly/camera_nadir/image_raw', Image, self.image_callback)
+        self.image_sub = rospy.Subscriber('/firefly/vi_sensor/right/image_raw', Image, self.image_callback)
 
         self.states_sub = rospy.Subscriber('/gazebo/model_states', ModelStates, self.states_callback)
 
