@@ -1,20 +1,22 @@
 #!/usr/bin/env python
 import time
+import math
 import rospy
-from geometry_msgs.msg import PoseStamped, PointStamped, Point
+from geometry_msgs.msg import PoseStamped, PointStamped, Point, PoseWithCovarianceStamped, Quaternion
 from sensor_msgs.msg import Image
-from gazebo_msgs.msg import ModelStates
 from visualization_msgs.msg import Marker, MarkerArray
+import tf.transformations
 
 import cv2
 from cv_bridge import CvBridge, CvBridgeError
 
-import threading
+# my libraries
+from exploration import *
 
 def sign(n): 
     if n<0: return -1 
     elif n>0: return 1 
-    else: 0 
+    else: return 0 
 
 def send_pose(pos, orient):
 	pose_pub = rospy.Publisher('/firefly/command/pose', PoseStamped, queue_size=1)
@@ -29,42 +31,43 @@ def send_pose(pos, orient):
 	pose_msg.pose.position = pos
 
 	# Set orientation (Quaternion)
-	#pose_msg.pose.orientation = orient
+	pose_msg.pose.orientation = orient
 
 	pose_msg.header.stamp = rospy.Time.now()  # Update timestamp
 	pose_pub.publish(pose_msg)
 	rate.sleep()
 
 
-
 class DroneSubscriber:
     def __init__(self):
-        self.drone_x = 0.0
-        self.drone_y = 0.0
+        self.pos = PoseStamped()
+        self.orient = Quaternion()
         self.altitude = 5.0
 
         self.marker_no = 0
-        self.markers_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=100)
         self.marker_array = MarkerArray()
+        self.angles = []
         self.waypoints = []
 
         # Initialize the ROS node
         rospy.init_node('drone_subscriber', anonymous=True)
         
-        # Create a CvBridge object to convert ROS images to OpenCV images
-        self.bridge = CvBridge()
-        
         # Subscribe to the image topic
         self.image_sub = rospy.Subscriber('/firefly/vi_sensor/right/image_raw', Image, self.image_callback)
 
-        self.states_sub = rospy.Subscriber('/gazebo/model_states', ModelStates, self.states_callback)
+        # Subscribe to the drone position topic
+        self.drone_pos_sub = rospy.Subscriber('/firefly/ground_truth/pose_with_covariance', PoseWithCovarianceStamped, self.drone_pos_callback)
         
-        self.click = rospy.Subscriber('/clicked_point', PointStamped, self.click_callback)
+        # Subscribe to the clicked point topic
+        self.click_sub = rospy.Subscriber('/clicked_point', PointStamped, self.click_callback)
+
+        # Create a publisher for the markers
+        self.markers_pub = rospy.Publisher("visualization_marker_array", MarkerArray, queue_size=100)
 
     def image_callback(self, data):
         try:
             # Convert the ROS Image message to an OpenCV image
-            cv_image = self.bridge.imgmsg_to_cv2(data, desired_encoding="bgr8")
+            cv_image = CvBridge().imgmsg_to_cv2(data, desired_encoding="bgr8")
         except CvBridgeError as e:
             rospy.logerr(f"CvBridge Error: {e}")
             return
@@ -73,54 +76,46 @@ class DroneSubscriber:
         cv2.imshow('Camera Image', cv_image)
         cv2.waitKey(1)  # Press any key to close the window
 
-    def states_callback(self, data):
-        self.drone_pos = data.pose[1].position
-        self.drone_orient = data.pose[1].orientation
+    def drone_pos_callback(self, msg):
+        self.pos = msg.pose.pose.position
+        self.orient = msg.pose.pose.orientation
 
     def click_callback(self, msg):
-        print("coordinates:x=%f y=%f" %(msg.point.x, msg.point.y))
-        if len(self.waypoints) > 0:
-            self.put_marker(msg.point, Point(self.waypoints[-1][0], self.waypoints[-1][1], 0))
+        print("clicked coordinates: x = %f y = %f" %(msg.point.x, msg.point.y))
+        if len(self.angles) > 0:
+            self.put_marker(msg.point, Point(self.angles[-1][0], self.angles[-1][1], 0))
         else:
             self.put_marker(msg.point)
-        self.waypoints.append([msg.point.x,msg.point.y])
+        self.angles.append([msg.point.x,msg.point.y])
 
-    def follow_waypoints(self):
+    def follow_waypoints(self, waypoints, step_size=1):
         print("Following Waypoints Mission Started")
-        for i, wp in enumerate(self.waypoints):
-            print(i+1, ". waypoint: ", wp)
-            self.go(wp)
-            print("reached", i+1, ". waypoint: ")
-        
+        for wp in waypoints:
+            self.move_to(wp, 0.5, step_size)
         print("Waypoints Mission Completed")
     
-    def go(self, pos):
-        eps = 1.5
-        radius = 0.1
-        while(abs(pos[0]-self.drone_pos.x) > radius and abs(pos[1]-self.drone_pos.y) > radius):
-            self.drone_pos.x += sign(pos[0]-self.drone_pos.x)*eps
-            self.drone_pos.y += sign(pos[1]-self.drone_pos.y)*eps
-            self.drone_pos.z = self.altitude
-            send_pose(self.drone_pos, self.drone_orient)
+    def move_to(self, pos, radius=0.5, step_size=1):
+        # Calculate orientation
+        dx = pos[0] - self.pos.x
+        dy = pos[1] - self.pos.y
+        yaw = math.atan2(dy, dx)
+
+        # Convert yaw to quaternion
+        quaternion = tf.transformations.quaternion_from_euler(0, 0, yaw)
+        orient = Quaternion()
+        orient.x = quaternion[0]
+        orient.y = quaternion[1]
+        orient.z = quaternion[2]
+        orient.w = quaternion[3]
+
+        while(abs(pos[0]-self.pos.x) > radius or abs(pos[1]-self.pos.y) > radius):
+            self.pos.x += sign(pos[0]-self.pos.x)*step_size
+            self.pos.y += sign(pos[1]-self.pos.y)*step_size
+            self.pos.z = self.altitude
+            
+            send_pose(self.pos, orient)
             time.sleep(0.1)
-
-
-    def user_input(self):
-        while not rospy.is_shutdown():
-            cmd = input("Give a command: ")
-            if cmd == "q":
-                print("Quitting")
-            elif cmd == "w":
-                self.drone_pos.x += 1
-                self.drone_pos.z = self.altitude
-                send_pose(self.drone_pos, self.drone_orient)
-            elif cmd == "start":
-                self.follow_waypoints()
-            elif cmd == "go":
-                self.go_waypoint()
-            else:
-                cmd = list(map(float, cmd.split()))
-                self.go(cmd)
+        print("Reached the target position: ", self.pos.x, self.pos.y)
     
     def put_marker(self, pos, last_pos=None):
         marker = Marker()
@@ -137,11 +132,11 @@ class DroneSubscriber:
         marker.pose.orientation.w = 1.0
         marker.scale.x = 1.0
         marker.scale.y = 1.0
-        marker.scale.z = 50.0
+        marker.scale.z = 25.0
         marker.color.a = 1.0
-        marker.color.r = 1.0
-        marker.color.g = 0.0
-        marker.color.b = 0.0
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 1.0
         marker.lifetime = rospy.Duration()
 
         if last_pos != None:
@@ -152,7 +147,6 @@ class DroneSubscriber:
             line.id = 0
             line.type = Marker.LINE_STRIP
             line.action = Marker.ADD
-            #line.pose.position = pos
             line.pose.orientation.x = 0.0
             line.pose.orientation.y = 0.0
             line.pose.orientation.z = 0.0
@@ -176,14 +170,17 @@ class DroneSubscriber:
         self.marker_array.markers.append(marker)
         self.markers_pub.publish(self.marker_array)
         
-        print("Marker published")
+    def delete_all_markers(self):
+        self.angles = []
+        for marker in self.marker_array.markers:
+            marker.action = Marker.DELETE
+        self.markers_pub.publish(self.marker_array)
+        print("All markers deleted")
 
 
 if __name__ == '__main__':
     try:
         drone_sub = DroneSubscriber()
-        
-        threading.Thread(target=drone_sub.user_input).start()
         rospy.spin()
     except rospy.ROSInterruptException:
         pass
