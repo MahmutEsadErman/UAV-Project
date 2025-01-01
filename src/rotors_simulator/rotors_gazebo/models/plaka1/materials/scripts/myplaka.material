@@ -1,0 +1,16 @@
+    material myplaka
+    {
+        technique
+        {
+            pass
+            {
+                texture_unit
+                {
+                    texture ../textures/plaka.png
+                    
+                }
+            }
+        }
+    }
+
+
