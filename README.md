@@ -5,5 +5,5 @@ roslaunch rotors_gazebo mav_with_map.launch  world_name:=basic_with_car
 to run follow waypoints script
 
 ```bash
-python python_scripts/clicked_point.py
+python python_scripts/main.py
 ```
