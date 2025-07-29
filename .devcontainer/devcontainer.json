@@ -1,0 +1,25 @@
+{
+  "name": "noetic desktop-full",
+  "dockerFile": "Dockerfile",
+  "runArgs": [
+    "--privileged",
+    "--network=host",
+    "-v", "/tmp/.X11-unix:/tmp/.X11-unix"
+  ],
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/${localWorkspaceFolderBasename},type=bind",
+  "workspaceFolder": "/${localWorkspaceFolderBasename}",
+
+  // Build the workspace after creation
+  "postCreateCommand": "catkin clean -y && catkin build -j4",
+
+
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/python:1": {}
+  }
+
+  
+}
